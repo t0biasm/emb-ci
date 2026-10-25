@@ -1,0 +1,117 @@
+name: build-bazel
+
+# Reusable workflow: build a Bazel target (optionally with submodules) and
+# upload the resulting artifacts to Artifactory.
+#
+# Call from a project repo, pinned by tag:
+#   uses: t0biasm/emb-ci/.github/workflows/build-bazel.yaml@v1
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: "Bazel target to build, e.g. //applications/sumobot:app"
+        type: string
+        required: true
+      config:
+        description: "Bazel --config value (empty for none), e.g. atmega32u4"
+        type: string
+        default: ""
+      project:
+        description: "Project name; first path element of the upload location"
+        type: string
+        required: true
+      upload:
+        description: "Upload build outputs to Artifactory"
+        type: boolean
+        default: true
+      artifact-patterns:
+        description: "Space-separated find -name patterns of files to upload"
+        type: string
+        default: "*.hex *.elf *.bin *.out"
+      submodules:
+        description: "Checkout submodules: false, true or recursive"
+        type: string
+        default: "recursive"
+      runs-on:
+        description: "JSON array of runner labels"
+        type: string
+        default: '["self-hosted","linux","x64"]'
+    secrets:
+      ARTIFACTORY_URL:
+        required: false
+      ARTIFACTORY_USER:
+        required: false
+      ARTIFACTORY_API_KEY:
+        required: false
+
+jobs:
+  build:
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.8.1
+        with:
+          bazelisk-cache: true
+
+      - name: Build with Bazel
+        env:
+          TARGET: ${{ inputs.target }}
+          CONFIG: ${{ inputs.config }}
+        run: |
+          args=()
+          if [ -n "$CONFIG" ]; then args+=("--config=$CONFIG"); fi
+          bazel build "${args[@]}" "$TARGET"
+
+      - name: Collect artifacts
+        env:
+          TARGET: ${{ inputs.target }}
+          PATTERNS: ${{ inputs.artifact-patterns }}
+        run: |
+          # //pkg/path:name -> pkg/path
+          pkg="${TARGET#//}"
+          pkg="${pkg%%:*}"
+          mkdir -p artifacts
+          find_args=()
+          for p in $PATTERNS; do
+            if [ ${#find_args[@]} -gt 0 ]; then find_args+=(-o); fi
+            find_args+=(-name "$p")
+          done
+          find "bazel-bin/$pkg" -type f \( "${find_args[@]}" \) -exec cp {} artifacts/ \;
+          echo "Artifacts:"
+          ls -lh artifacts/
+
+      - name: Upload to Artifactory
+        if: ${{ inputs.upload }}
+        env:
+          ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
+          ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+          ARTIFACTORY_API_KEY: ${{ secrets.ARTIFACTORY_API_KEY }}
+          PROJECT: ${{ inputs.project }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          timestamp=$(date +"%Y-%m-%d_%H-%M-%S")
+          if [ "$EVENT" == "pull_request" ]; then
+            upload_path="builds-local/${PROJECT}/pull/${PR_NUMBER}/${timestamp}"
+          else
+            upload_path="builds-local/${PROJECT}/main/${timestamp}"
+          fi
+
+          shopt -s nullglob
+          for file in artifacts/*; do
+            [ -f "$file" ] || continue
+            name=$(basename "$file")
+            echo "Uploading $name..."
+            curl --fail --silent --show-error \
+              -u "$ARTIFACTORY_USER:$ARTIFACTORY_API_KEY" \
+              -X PUT -T "$file" \
+              "$ARTIFACTORY_URL/${upload_path}/$name"
+            echo "Uploaded $name"
+          done
+          echo "All artifacts uploaded to: $ARTIFACTORY_URL/${upload_path}/"

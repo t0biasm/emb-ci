@@ -1,0 +1,15 @@
+# Copy to <project>/.github/workflows/ci.yaml
+name: ci
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    uses: t0biasm/emb-ci/.github/workflows/build-bazel.yaml@v1
+    with:
+      project: prj-sumobot
+      target: //applications/sumobot:app
+      config: atmega32u4
+    secrets: inherit
