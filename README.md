@@ -19,5 +19,5 @@ Call a workflow from a project repo, **pinned by tag**; see `examples/project-ci
 
 ## Requirements
 - Self-hosted runner with labels `self-hosted, linux, x64` (override with `runs-on`).
-- Secrets `ARTIFACTORY_URL`, `ARTIFACTORY_USER`, `ARTIFACTORY_API_KEY` in the calling repo.
+- Secrets `ARTIFACTORY_URL`, `ARTIFACTORY_USER`, `ARTIFACTORY_API_KEY` in the calling repo. `ARTIFACTORY_URL` is also passed to Bazel as `--repo_env=EMB_ARTIFACTORY_URL` (needed by `emb-toolchain`). Compiler downloads authenticate through `~/.netrc` on the runner.
 - If this repo is private: Settings -> Actions -> General -> Access -> accessible from repositories owned by the user.

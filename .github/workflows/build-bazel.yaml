@@ -63,9 +63,15 @@ jobs:
         env:
           TARGET: ${{ inputs.target }}
           CONFIG: ${{ inputs.config }}
+          ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
         run: |
           args=()
           if [ -n "$CONFIG" ]; then args+=("--config=$CONFIG"); fi
+          # Toolchains (emb-toolchain) download compilers from Artifactory;
+          # the URL is kept out of the sources and passed in here.
+          if [ -n "$ARTIFACTORY_URL" ]; then
+            args+=("--repo_env=EMB_ARTIFACTORY_URL=$ARTIFACTORY_URL")
+          fi
           bazel build "${args[@]}" "$TARGET"
 
       - name: Collect artifacts
