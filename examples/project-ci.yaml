@@ -12,4 +12,6 @@ jobs:
       project: prj-sumobot
       target: //applications/sumobot:app
       config: atmega32u4
+      # extensionless "app" is the ELF produced by cc_binary_avr8
+      artifact-patterns: "*.hex *.elf *.bin app"
     secrets: inherit
