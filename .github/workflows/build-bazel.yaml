@@ -59,6 +59,31 @@ jobs:
         with:
           bazelisk-cache: true
 
+      - name: Configure Artifactory credentials
+        env:
+          ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
+          ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+          ARTIFACTORY_API_KEY: ${{ secrets.ARTIFACTORY_API_KEY }}
+        run: |
+          # Bazel authenticates its downloads (compilers) with a credential
+          # helper. Write a short-lived one from the secrets instead of relying
+          # on a ~/.netrc on the runner; it is deleted again in the last step.
+          if [ -n "$ARTIFACTORY_URL" ] && [ -n "$ARTIFACTORY_USER" ] && [ -n "$ARTIFACTORY_API_KEY" ]; then
+            host="${ARTIFACTORY_URL#*://}"
+            host="${host%%/*}"
+            basic=$(printf '%s:%s' "$ARTIFACTORY_USER" "$ARTIFACTORY_API_KEY" | base64 -w0)
+            echo "::add-mask::$ARTIFACTORY_API_KEY"
+            echo "::add-mask::$basic"
+            helper="$RUNNER_TEMP/artifactory-credential-helper"
+            umask 077
+            printf '%s\n' \
+              '#!/bin/sh' \
+              'cat > /dev/null' \
+              "echo '{\"headers\":{\"Authorization\":[\"Basic $basic\"]}}'" > "$helper"
+            chmod 700 "$helper"
+            echo "BAZEL_CREDENTIAL_HELPER=--credential_helper=$host=$helper" >> "$GITHUB_ENV"
+          fi
+
       - name: Build with Bazel
         env:
           TARGET: ${{ inputs.target }}
@@ -71,6 +96,9 @@ jobs:
           # the URL is kept out of the sources and passed in here.
           if [ -n "$ARTIFACTORY_URL" ]; then
             args+=("--repo_env=EMB_ARTIFACTORY_URL=$ARTIFACTORY_URL")
+          fi
+          if [ -n "$BAZEL_CREDENTIAL_HELPER" ]; then
+            args+=("$BAZEL_CREDENTIAL_HELPER")
           fi
           bazel build "${args[@]}" "$TARGET"
 
@@ -121,3 +149,7 @@ jobs:
             echo "Uploaded $name"
           done
           echo "All artifacts uploaded to: $ARTIFACTORY_URL/${upload_path}/"
+
+      - name: Remove Artifactory credentials
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/artifactory-credential-helper"
