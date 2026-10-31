@@ -1,0 +1,23 @@
+name: test
+
+# Smoke tests of emb-ci itself. GitHub-hosted runner on purpose: no secrets,
+# nothing from here reaches the self-hosted runner.
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests of tools/emb_deps.py
+        working-directory: tools
+        run: python3 -m unittest -v test_emb_deps
+      - name: Tests of bot/*.sh (local git repos, gh shim)
+        run: bot/test.sh
+      - name: Workflow files parse
+        run: python3 -c "import sys,yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" .github/workflows/*.yaml examples/*.yaml

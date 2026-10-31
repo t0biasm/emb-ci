@@ -1,0 +1,191 @@
+name: propagate
+
+# Reusable workflow: after a push to a branch/tag of a generic repository
+# (emb-*), move the submodule pointer in every dependent project branch that
+# follows it - but only if the project's own CI is green with it.
+#
+# Who follows what is declared in emb-project.toml of each project branch
+# ([follow."<submodule path>"], see tools/emb_deps.py). Projects are the
+# repositories of the owner with the topic "emb-project"; their default branch
+# and release/* branches are looked at.
+#
+# Per matching project branch (mode auto):
+#   1. push branch bot/bump-<repo>-<sha8>[-<branch>] with the new pointer(s);
+#      the project CI (push trigger on bot/**) builds it,
+#   2. green -> fast-forward the project branch to that commit, delete the
+#      bot branch; red / no CI / timeout -> issues in the generic repository
+#      and in the project, the bot branch is kept.
+# Mode pr: open a pull request from the bot branch instead (a human merges).
+# Only fast-forward moves are applied; one run per project branch at a time.
+#
+# Call from a generic repo, pinned by tag (examples/propagate-caller.yaml).
+# The GitHub App needs: Contents rw, Pull requests rw, Issues rw, Checks r,
+# Metadata r, and must be allowed to push to the project branches (ruleset
+# bypass).
+#
+# Runs on GitHub-hosted runners on purpose: the app private key must never be
+# available on the self-hosted runner. The builds happen in the project CI.
+
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: "ID of the GitHub App that pushes the bumps"
+        type: string
+        required: true
+      ci-ref:
+        description: "Tag/ref of emb-ci that provides bot/ and tools/ (the tag this workflow is called with)"
+        type: string
+        required: true
+    secrets:
+      app-private-key:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.find.outputs.targets }}
+    steps:
+      - name: Create app token
+        id: app
+        uses: actions/create-github-app-token@v2.0.6
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout emb-ci (bot scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/emb-ci
+          ref: ${{ inputs.ci-ref }}
+          path: .emb-ci
+
+      - name: Find project branches that follow this push
+        id: find
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          SRC_REF: ${{ github.ref }}
+          SRC_FULL: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          export SRC_NAME="${SRC_FULL#*/}"
+          targets=$(.emb-ci/bot/discover.sh)
+          echo "Targets: $targets"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  bump:
+    needs: discover
+    if: ${{ needs.discover.outputs.targets != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.discover.outputs.targets) }}
+    concurrency:
+      group: emb-propagate-${{ matrix.target.project }}-${{ matrix.target.branch }}
+      cancel-in-progress: false
+    steps:
+      - name: Create app token
+        id: app
+        uses: actions/create-github-app-token@v2.0.6
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout emb-ci (bot scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/emb-ci
+          ref: ${{ inputs.ci-ref }}
+          path: .emb-ci
+
+      - name: Checkout project branch
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.target.project }}
+          ref: ${{ matrix.target.branch }}
+          token: ${{ steps.app.outputs.token }}
+          path: project
+
+      - name: Move submodule pointers to the pushed commit
+        id: bump
+        working-directory: project
+        env:
+          NEW_SHA: ${{ github.sha }}
+          SRC_REPO: ${{ github.repository }}
+          PATHS: ${{ toJSON(matrix.target.paths) }}
+          BRANCH: ${{ matrix.target.branch }}
+          BOT_NAME: ${{ steps.app.outputs.app-slug }}[bot]
+          BOT_EMAIL: ${{ steps.app.outputs.app-slug }}[bot]@users.noreply.github.com
+        run: ../.emb-ci/bot/bump.sh
+
+      - name: Wait for the project CI
+        id: wait
+        if: ${{ steps.bump.outputs.changed == 'true' && matrix.target.mode == 'auto' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PROJECT: ${{ matrix.target.project }}
+          COMMIT: ${{ steps.bump.outputs.commit }}
+        run: echo "result=$(.emb-ci/bot/wait-ci.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Green - fast-forward the project branch
+        if: ${{ steps.wait.outputs.result == 'green' }}
+        working-directory: project
+        env:
+          BRANCH: ${{ matrix.target.branch }}
+          BOT_BRANCH: ${{ steps.bump.outputs.bot_branch }}
+          COMMIT: ${{ steps.bump.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "$BRANCH"
+          if ! git merge-base --is-ancestor "origin/$BRANCH" "$COMMIT"; then
+            echo "::error::$BRANCH of the project moved while the CI was running; re-run this workflow (the bump branch $BOT_BRANCH is kept)"
+            exit 1
+          fi
+          git push origin "$COMMIT:refs/heads/$BRANCH"
+          git push origin --delete "$BOT_BRANCH"
+
+      - name: Mode pr - open a pull request
+        if: ${{ steps.bump.outputs.changed == 'true' && matrix.target.mode == 'pr' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PROJECT: ${{ matrix.target.project }}
+          BRANCH: ${{ matrix.target.branch }}
+          BOT_BRANCH: ${{ steps.bump.outputs.bot_branch }}
+          SRC_REPO: ${{ github.repository }}
+          NEW_SHA: ${{ github.sha }}
+        run: |
+          gh pr create -R "$PROJECT" --base "$BRANCH" --head "$BOT_BRANCH" \
+            --title "Bump ${SRC_REPO#*/} to ${NEW_SHA:0:8}" \
+            --body "Automatic submodule bump (mode pr): https://github.com/${SRC_REPO}/commit/${NEW_SHA}"
+
+      - name: Not green - report
+        if: ${{ steps.bump.outputs.changed == 'true' && matrix.target.mode == 'auto' && steps.wait.outputs.result != 'green' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PROJECT: ${{ matrix.target.project }}
+          BRANCH: ${{ matrix.target.branch }}
+          SRC_REPO: ${{ github.repository }}
+          NEW_SHA: ${{ github.sha }}
+          BOT_BRANCH: ${{ steps.bump.outputs.bot_branch }}
+          RESULT: ${{ steps.wait.outputs.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          short="${NEW_SHA:0:8}"
+          body="The pushed commit https://github.com/${SRC_REPO}/commit/${NEW_SHA} was not moved into ${PROJECT} (${BRANCH}), result: ${RESULT}.
+
+          - Bump branch (kept for inspection): https://github.com/${PROJECT}/tree/${BOT_BRANCH}
+          - Propagation run: ${RUN_URL}"
+          gh issue create -R "$SRC_REPO" \
+            --title "Downstream: ${PROJECT}@${BRANCH} not updated to ${short} (${RESULT})" --body "$body"
+          gh issue create -R "$PROJECT" \
+            --title "Submodule bump to ${short} from ${SRC_REPO} failed on ${BRANCH} (${RESULT})" --body "$body"
+          exit 1
