@@ -1,0 +1,227 @@
+name: propagate
+
+# Reusable workflow: after a merge to main of a generic repository (emb-*),
+# move the submodule pointer in every dependent project (repository topic
+# "emb-project") to the merged commit - but only if the project's own CI is
+# green with it.
+#
+# Per project:
+#   1. push branch bot/bump-<repo>-<sha8> with the new submodule pointer; the
+#      project CI (push trigger on bot/**) builds it,
+#   2. green  -> fast-forward the project's main to that commit, delete branch,
+#      red    -> open an issue in the generic repository and in the project,
+#      keep the branch for inspection.
+# Only fast-forward moves (new commit is a descendant of the pinned one) are
+# applied; one run per project at a time.
+#
+# Call from a generic repo, pinned by tag (see examples/propagate-caller.yaml).
+# The GitHub App needs: Contents rw, Issues rw, Checks r, Metadata r, and must
+# be allowed to push to main of the projects (ruleset bypass).
+#
+# Runs on GitHub-hosted runners on purpose: the app private key must never be
+# available on the self-hosted runner. The builds happen in the project CI.
+
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: "ID of the GitHub App that pushes the bumps"
+        type: string
+        required: true
+    secrets:
+      app-private-key:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      projects: ${{ steps.find.outputs.projects }}
+    steps:
+      - name: Create app token
+        id: app
+        uses: actions/create-github-app-token@v2.0.6
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Find projects (topic emb-project)
+        id: find
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          projects=$(gh api -X GET search/repositories \
+            -f q="topic:emb-project user:$OWNER archived:false" \
+            --jq '[.items[].full_name]' | jq -c .)
+          echo "Projects: $projects"
+          echo "projects=$projects" >> "$GITHUB_OUTPUT"
+
+  bump:
+    needs: discover
+    if: ${{ needs.discover.outputs.projects != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.discover.outputs.projects) }}
+    concurrency:
+      group: emb-propagate-${{ matrix.project }}
+      cancel-in-progress: false
+    steps:
+      - name: Create app token
+        id: app
+        uses: actions/create-github-app-token@v2.0.6
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout project
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.project }}
+          ref: main
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: true
+
+      - name: Move submodule pointer to the merged commit
+        id: bump
+        env:
+          NEW_SHA: ${{ github.sha }}
+          SRC_REPO: ${{ github.repository }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          repo_name="${SRC_REPO#*/}"
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+
+          # submodule whose URL ends with /<repo_name>[.git]
+          key=$(git config -f .gitmodules --get-regexp '^submodule\..*\.url$' \
+            | awk -v r="/$repo_name" '{u=$2; sub(/\.git$/, "", u); if (substr(u, length(u)-length(r)+1) == r) print $1}' \
+            | head -1)
+          if [ -z "$key" ]; then
+            echo "::notice::${repo_name} is not a submodule of this project, nothing to do"
+            exit 0
+          fi
+          path=$(git config -f .gitmodules --get "${key%.url}.path")
+          old=$(git rev-parse "HEAD:$path")
+          if [ "$old" = "$NEW_SHA" ]; then
+            echo "::notice::$path is already at $NEW_SHA"
+            exit 0
+          fi
+
+          git submodule update --init --no-recommend-shallow -- "$path"
+          git -C "$path" fetch --quiet origin main
+          if ! git -C "$path" cat-file -e "$NEW_SHA^{commit}"; then
+            echo "::error::$NEW_SHA not found in $SRC_REPO main"
+            exit 1
+          fi
+          if ! git -C "$path" merge-base --is-ancestor "$old" "$NEW_SHA"; then
+            echo "::warning::$NEW_SHA is not a descendant of the pinned $old, not moving (only fast-forward bumps are automatic)"
+            exit 0
+          fi
+          subject=$(git -C "$path" log -1 --format=%s "$NEW_SHA")
+
+          git -C "$path" checkout --quiet "$NEW_SHA"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          git add "$path"
+          branch="bot/bump-${repo_name}-${NEW_SHA:0:8}"
+          git checkout -q -b "$branch"
+          git commit -q -m "Bump ${repo_name} to ${NEW_SHA:0:8}" \
+            -m "${subject}" \
+            -m "https://github.com/${SRC_REPO}/commit/${NEW_SHA}"
+          git push origin "HEAD:refs/heads/$branch"
+
+          {
+            echo "changed=true"
+            echo "branch=$branch"
+            echo "commit=$(git rev-parse HEAD)"
+            echo "path=$path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the project CI
+        id: wait
+        if: ${{ steps.bump.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PROJECT: ${{ matrix.project }}
+          COMMIT: ${{ steps.bump.outputs.commit }}
+        run: |
+          set -euo pipefail
+          sleep 30
+          deadline=$((SECONDS + 3600))
+          appear_deadline=$((SECONDS + 600))
+          stable=0
+          while true; do
+            json=$(gh api "repos/$PROJECT/commits/$COMMIT/check-runs" \
+              --jq '[.check_runs[] | {status, conclusion}]')
+            total=$(jq length <<<"$json")
+            pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$json")
+            if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
+              stable=$((stable + 1))
+              [ "$stable" -ge 2 ] && break
+            else
+              stable=0
+            fi
+            if [ "$total" -eq 0 ] && [ "$SECONDS" -gt "$appear_deadline" ]; then
+              echo "::error::The CI of $PROJECT did not start for $COMMIT (push trigger on bot/** missing?)"
+              echo "result=no-ci" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$SECONDS" -gt "$deadline" ]; then
+              echo "::error::Timeout waiting for the CI of $PROJECT"
+              echo "result=timeout" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 20
+          done
+          bad=$(jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length' <<<"$json")
+          if [ "$bad" -eq 0 ]; then
+            echo "result=green" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=red" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Green - fast-forward main of the project
+        if: ${{ steps.wait.outputs.result == 'green' }}
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          COMMIT: ${{ steps.bump.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor origin/main "$COMMIT"; then
+            echo "::error::main of the project moved while the CI was running; re-run this workflow (the bump branch $BRANCH is kept)"
+            exit 1
+          fi
+          git push origin "$COMMIT:refs/heads/main"
+          git push origin --delete "$BRANCH"
+
+      - name: Not green - report
+        if: ${{ steps.bump.outputs.changed == 'true' && steps.wait.outputs.result != 'green' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PROJECT: ${{ matrix.project }}
+          SRC_REPO: ${{ github.repository }}
+          NEW_SHA: ${{ github.sha }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          RESULT: ${{ steps.wait.outputs.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          short="${NEW_SHA:0:8}"
+          body="The merged commit https://github.com/${SRC_REPO}/commit/${NEW_SHA} was not moved into ${PROJECT} (result: ${RESULT}).
+
+          - Bump branch (kept for inspection): https://github.com/${PROJECT}/tree/${BRANCH}
+          - Propagation run: ${RUN_URL}"
+          gh issue create -R "$SRC_REPO" \
+            --title "Downstream: ${PROJECT} not updated to ${short} (${RESULT})" --body "$body"
+          gh issue create -R "$PROJECT" \
+            --title "Submodule bump to ${short} from ${SRC_REPO} failed (${RESULT})" --body "$body"
+          exit 1

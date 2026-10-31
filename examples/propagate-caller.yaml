@@ -1,0 +1,19 @@
+# .github/workflows/propagate.yaml in a generic repository (emb-toolchain,
+# emb-platform, ...). After every merge to main, move the submodule pointer of
+# all projects (topic "emb-project") to the merged commit if their CI is green.
+#
+# Needs in this repository: variable EMB_BOT_APP_ID, secret EMB_BOT_PRIVATE_KEY.
+name: propagate
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  propagate:
+    uses: t0biasm/emb-ci/.github/workflows/propagate.yaml@v1.3.0
+    with:
+      app-id: ${{ vars.EMB_BOT_APP_ID }}
+    secrets:
+      app-private-key: ${{ secrets.EMB_BOT_PRIVATE_KEY }}
