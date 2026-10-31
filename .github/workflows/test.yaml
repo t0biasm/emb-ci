@@ -17,5 +17,7 @@ jobs:
       - name: Unit tests of tools/emb_deps.py
         working-directory: tools
         run: python3 -m unittest -v test_emb_deps
+      - name: Tests of bot/*.sh (local git repos, gh shim)
+        run: bot/test.sh
       - name: Workflow files parse
         run: python3 -c "import sys,yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" .github/workflows/*.yaml examples/*.yaml

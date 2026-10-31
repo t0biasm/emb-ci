@@ -15,7 +15,7 @@ emb-project.toml:
     [follow."toolchain/emb-toolchain"]
     track = "main"          # branch name, or "tag:<glob>" e.g. "tag:v1.*"
     mode  = "auto"          # auto: push after green CI, pr: open a PR, off
-    group = "core"          # optional: members of a group are bumped together
+    group = "core"          # optional, reserved: members must share the mode (not applied by the bot yet)
 
 Submodules that are not listed are frozen.
 

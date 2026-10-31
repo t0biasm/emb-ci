@@ -23,9 +23,18 @@ Call a workflow from a project repo, **pinned by tag**; see `examples/project-ci
 - If this repo is private: Settings -> Actions -> General -> Access -> accessible from repositories owned by the user.
 
 ## propagate (generic repos -> projects)
-`.github/workflows/propagate.yaml` moves the submodule pointer of every project (repository topic `emb-project`) to a commit merged into a generic repository, but only when the project CI is green with it. Example caller: `examples/propagate-caller.yaml`.
+`.github/workflows/propagate.yaml` moves the submodule pointers of the project branches that **follow** a pushed branch/tag of a generic repository, but only when the project's CI is green with it. Example caller: `examples/propagate-caller.yaml`; scripts in `bot/`, tests `bot/test.sh`.
 
-Per project: the bot pushes `bot/bump-<repo>-<sha8>`, the project CI builds it (the project needs `on: push: branches: [ "bot/**" ]`), and on green the bot fast-forwards the project's `main` to that commit and deletes the branch. On red (or no CI / timeout) it opens an issue in the generic repository and in the project and keeps the branch. Only fast-forward bumps are applied; there is one run per project at a time.
+Who follows what is declared per project branch in `emb-project.toml` (read and checked by `tools/emb_deps.py`):
+```toml
+project = "prj-sumobot"
 
-Setup: a GitHub App (Contents rw, Issues rw, Checks r, Metadata r) installed on the repositories, `EMB_BOT_APP_ID` (variable) and `EMB_BOT_PRIVATE_KEY` (secret) in the generic repository, and the app on the bypass list of the project's `main` ruleset. The workflow runs on GitHub-hosted runners so the key never reaches the self-hosted runner.
+[follow."toolchain/emb-toolchain"]
+track = "main"          # branch, or "tag:v1.*"
+mode  = "auto"          # auto = push after green CI, pr = open a PR, off
+```
+Submodules that are not listed are frozen. Projects are the repositories with the topic `emb-project`; the default branch and `release/*` are considered. A release branch must not track `main` (it follows a maintained line such as `release/1.x`); such files are skipped with a warning. `group` is reserved (must share the mode) and not applied by the bot yet.
 
+Per matching branch: the bot pushes `bot/bump-<repo>-<sha8>[-<branch>]`, the project CI builds it (the stub needs `on: push: branches: [ "bot/**" ]`) and on green the bot fast-forwards the project branch to that commit and deletes the bot branch. On red, missing CI or timeout it opens an issue in the generic repository and in the project and keeps the branch. Mode `pr` opens a pull request instead. Only fast-forward bumps are applied; one run per project branch at a time.
+
+Setup: a GitHub App (Contents rw, Pull requests rw, Issues rw, Checks r, Metadata r) installed on the repositories, `EMB_BOT_APP_ID` (variable) and `EMB_BOT_PRIVATE_KEY` (secret) in the generic repository, and the app on the bypass list of the project's branch rulesets. The workflow runs on GitHub-hosted runners so the key never reaches the self-hosted runner.
