@@ -16,6 +16,7 @@ on:
 
 jobs:
   propagate:
+    if: ${{ vars.EMB_BOT_APP_ID != '' }}     # skipped until the app is configured
     uses: t0biasm/emb-ci/.github/workflows/propagate.yaml@v1.3.0
     with:
       app-id: ${{ vars.EMB_BOT_APP_ID }}
