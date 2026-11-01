@@ -63,7 +63,8 @@ jobs:
           SRC_NAME: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
-          targets=$(.emb-ci/bot/discover.sh)
+          # label: short name for the check, e.g. prj-sumobot@main
+          targets=$(.emb-ci/bot/discover.sh | jq -c 'map(. + {label: ((.project | split("/")[1]) + "@" + .branch)})')
           echo "Targets: $targets"
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
@@ -75,7 +76,7 @@ jobs:
       fail-fast: false
       matrix:
         target: ${{ fromJSON(needs.discover.outputs.targets) }}
-    name: ${{ matrix.target.project }}@${{ matrix.target.branch }}
+    name: ${{ matrix.target.label }}
     concurrency:
       group: emb-canary-${{ github.event.pull_request.number }}-${{ matrix.target.project }}-${{ matrix.target.branch }}
       cancel-in-progress: true
