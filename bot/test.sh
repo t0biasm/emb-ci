@@ -85,3 +85,16 @@ grep -q 'changed=true' "$GITHUB_OUTPUT" && fail "no change expected"
 NEW_SHA=$div SRC_REPO=t0biasm/emb-platform PATHS='["platform/emb-platform"]' BRANCH=main "$here/bump.sh" >/dev/null 2>&1
 grep -q 'changed=true' "$GITHUB_OUTPUT" && fail "non-fast-forward must not bump"
 echo "bump.sh non-fast-forward ok"
+
+# canary: a non-fast-forward commit is built on a canary branch, main does not move
+: > "$GITHUB_OUTPUT"
+KIND=canary ALLOW_NON_FF=true FETCH_REF=refs/heads/other TITLE="Canary: emb-platform PR #1" \
+  NEW_SHA=$div SRC_REPO=t0biasm/emb-platform PATHS='["platform/emb-platform"]' BRANCH=main "$here/bump.sh" >/dev/null
+grep -q 'changed=true' "$GITHUB_OUTPUT" || fail "canary must accept a non-fast-forward commit"
+cb=$(sed -n 's/^bot_branch=//p' "$GITHUB_OUTPUT")
+[ "$cb" = "bot/canary-emb-platform-${div:0:8}" ] || fail "canary branch name $cb"
+pinned=$(git --git-dir="$tmp/proj.git" ls-tree "$cb" platform/emb-platform | awk '{print $3}')
+[ "$pinned" = "$div" ] || fail "canary pinned $pinned != $div"
+[ "$(git --git-dir="$tmp/proj.git" log -1 --format=%s "$cb")" = "Canary: emb-platform PR #1" ] || fail "canary title"
+[ "$(git --git-dir="$tmp/proj.git" rev-parse main)" != "$(git --git-dir="$tmp/proj.git" rev-parse "$cb")" ] || fail "canary must not move main"
+echo "bump.sh canary ok"

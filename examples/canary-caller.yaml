@@ -1,0 +1,22 @@
+# .github/workflows/canary.yaml in a generic repository (emb-toolchain,
+# emb-platform, ...). On every pull request to main / release lines, build the
+# project branches that follow the base branch with the PR's commit (see
+# .github/workflows/canary.yaml). Make the check "canary / gate" required in
+# the repository's ruleset.
+#
+# Needs in this repository: variable EMB_BOT_APP_ID, secret EMB_BOT_PRIVATE_KEY.
+name: canary
+
+on:
+  pull_request:
+    branches: [ main, "release/**" ]
+
+jobs:
+  canary:
+    if: ${{ vars.EMB_BOT_APP_ID != '' }}     # skipped until the app is configured
+    uses: t0biasm/emb-ci/.github/workflows/canary.yaml@v1.4.0
+    with:
+      app-id: ${{ vars.EMB_BOT_APP_ID }}
+      ci-ref: v1.4.0          # same tag as above
+    secrets:
+      app-private-key: ${{ secrets.EMB_BOT_PRIVATE_KEY }}
