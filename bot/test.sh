@@ -98,3 +98,46 @@ pinned=$(git --git-dir="$tmp/proj.git" ls-tree "$cb" platform/emb-platform | awk
 [ "$(git --git-dir="$tmp/proj.git" log -1 --format=%s "$cb")" = "Canary: emb-platform PR #1" ] || fail "canary title"
 [ "$(git --git-dir="$tmp/proj.git" rev-parse main)" != "$(git --git-dir="$tmp/proj.git" rev-parse "$cb")" ] || fail "canary must not move main"
 echo "bump.sh canary ok"
+
+# land.sh: auto mode with a project main that moves while the CI runs
+mkdir -p "$tmp/shim2"
+cat > "$tmp/shim2/gh" <<'SHIM'
+#!/usr/bin/env bash
+# only wait-ci.sh calls gh here: optionally land a commit on the project's main
+# once (simulating a concurrent propagation), then report one completed check
+if [ -f "$TEST_TMP/hook_pending" ]; then
+  rm -f "$TEST_TMP/hook_pending"
+  git -C "$TEST_TMP/other" push -q origin HEAD:main
+fi
+echo "[{\"status\":\"completed\",\"conclusion\":\"${SHIM_CONCL:-success}\"}]"
+SHIM
+chmod +x "$tmp/shim2/gh"
+export TEST_TMP="$tmp"
+git clone -q --recurse-submodules "$tmp/proj.git" "$tmp/land"
+git clone -q "$tmp/proj.git" "$tmp/other"
+git -C "$tmp/other" checkout -q main
+echo extra > "$tmp/other/f2"; git -C "$tmp/other" add f2; git -C "$tmp/other" commit -q -m "other propagation"
+touch "$tmp/hook_pending"
+cd "$tmp/land"
+export PATH="$tmp/shim2:$PATH" MODE=auto PROJECT=t0biasm/prj-x GH_TOKEN=x START_DELAY=0 POLL=0 TIMEOUT=60
+export NEW_SHA=$c2 SRC_REPO=t0biasm/emb-platform PATHS='["platform/emb-platform"]' BRANCH=main
+export GITHUB_OUTPUT="$tmp/land_out"; : > "$GITHUB_OUTPUT"
+"$here/land.sh" >/dev/null
+grep -q '^result=landed$' "$GITHUB_OUTPUT" || fail "land after a moved main: $(cat "$GITHUB_OUTPUT")"
+pinned=$(git --git-dir="$tmp/proj.git" ls-tree main platform/emb-platform | awk '{print $3}')
+[ "$pinned" = "$c2" ] || fail "landed pin $pinned != $c2"
+git --git-dir="$tmp/proj.git" cat-file -e main:f2 || fail "landed main lost the concurrent commit"
+[ -z "$(git ls-remote "$tmp/proj.git" "refs/heads/bot/bump-emb-platform-${c2:0:8}")" ] || fail "bump branch not deleted after landing"
+echo "land.sh moved main ok"
+
+# land.sh: red CI never moves main; the bump branch is kept
+git -C "$tmp/gen" checkout -q main; echo 3 > "$tmp/gen/f"; git -C "$tmp/gen" commit -q -am c3; git -C "$tmp/gen" push -q origin main
+c3=$(git -C "$tmp/gen" rev-parse main)
+export NEW_SHA=$c3 SHIM_CONCL=failure
+: > "$GITHUB_OUTPUT"
+"$here/land.sh" >/dev/null
+grep -q '^result=red$' "$GITHUB_OUTPUT" || fail "red CI result: $(cat "$GITHUB_OUTPUT")"
+pinned=$(git --git-dir="$tmp/proj.git" ls-tree main platform/emb-platform | awk '{print $3}')
+[ "$pinned" = "$c2" ] || fail "red CI moved main to $pinned"
+[ -n "$(git ls-remote "$tmp/proj.git" "refs/heads/bot/bump-emb-platform-${c3:0:8}")" ] || fail "bump branch of red CI not kept"
+echo "land.sh red ok"

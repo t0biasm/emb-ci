@@ -23,7 +23,7 @@ Call a workflow from a project repo, **pinned by tag**; see `examples/project-ci
 - If this repo is private: Settings -> Actions -> General -> Access -> accessible from repositories owned by the user.
 
 ## propagate (generic repos -> projects)
-`.github/workflows/propagate.yaml` moves the submodule pointers of the project branches that **follow** a pushed branch/tag of a generic repository, but only when the project's CI is green with it. Example caller: `examples/propagate-caller.yaml`; scripts in `bot/`, tests `bot/test.sh`.
+`.github/workflows/propagate.yaml` moves the submodule pointers of the project branches that **follow** a pushed branch/tag of a generic repository, but only when the project's CI is green with it. Example caller: `examples/propagate-caller.yaml`; scripts in `bot/`, tests `bot/test.sh`. If the project branch moved while its CI ran (another propagation landed), the bump is redone on top of it and the CI runs again (`bot/land.sh`, up to 3 attempts).
 
 Who follows what is declared per project branch in `emb-project.toml` (read and checked by `tools/emb_deps.py`):
 ```toml
