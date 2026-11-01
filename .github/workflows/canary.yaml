@@ -1,0 +1,187 @@
+name: canary
+
+# Reusable workflow: build the project branches that follow the base branch of
+# a pull request of a generic repository (emb-toolchain, emb-platform, ...),
+# with the submodule pointing at the PR's head commit.
+#
+# Per target (project branch) a canary branch bot/canary-<repo>-<sha8> is pushed
+# to the project; the project CI builds it (push trigger on bot/**) on the
+# self-hosted runner. The result is shown as check "canary / <project>@<branch>"
+# in the PR; the gate job "canary / gate" fails if any target is red. Nothing is
+# merged into a project branch, the canary branch is deleted afterwards.
+#
+# Only for pull requests from the same repository (secrets are not available to
+# forks). Call from a generic repo, pinned by tag (examples/canary-caller.yaml).
+# The GitHub App needs the same permissions as for propagate.
+
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: "ID of the GitHub App that pushes the canary branches"
+        type: string
+        required: true
+      ci-ref:
+        description: "Tag/ref of emb-ci that provides bot/ and tools/"
+        type: string
+        required: true
+    secrets:
+      app-private-key:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.find.outputs.targets }}
+    steps:
+      - name: Create app token
+        id: app
+        uses: actions/create-github-app-token@v2.0.6
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout emb-ci (bot scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/emb-ci
+          ref: ${{ inputs.ci-ref }}
+          path: .emb-ci
+
+      - name: Find project branches that follow the base branch
+        id: find
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          SRC_REF: refs/heads/${{ github.event.pull_request.base.ref }}
+          SRC_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          targets=$(.emb-ci/bot/discover.sh)
+          echo "Targets: $targets"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: discover
+    if: ${{ needs.discover.outputs.targets != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.discover.outputs.targets) }}
+    name: ${{ matrix.target.project }}@${{ matrix.target.branch }}
+    concurrency:
+      group: emb-canary-${{ github.event.pull_request.number }}-${{ matrix.target.project }}-${{ matrix.target.branch }}
+      cancel-in-progress: true
+    steps:
+      - name: Create app token
+        id: app
+        uses: actions/create-github-app-token@v2.0.6
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout emb-ci (bot scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/emb-ci
+          ref: ${{ inputs.ci-ref }}
+          path: .emb-ci
+
+      - name: Checkout project branch
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.target.project }}
+          ref: ${{ matrix.target.branch }}
+          token: ${{ steps.app.outputs.token }}
+          path: project
+
+      - name: Point submodules at the PR head and push a canary branch
+        id: bump
+        working-directory: project
+        env:
+          NEW_SHA: ${{ github.event.pull_request.head.sha }}
+          FETCH_REF: refs/pull/${{ github.event.pull_request.number }}/head
+          SRC_REPO: ${{ github.repository }}
+          PATHS: ${{ toJSON(matrix.target.paths) }}
+          BRANCH: ${{ matrix.target.branch }}
+          KIND: canary
+          ALLOW_NON_FF: "true"
+          TITLE: "Canary: ${{ github.repository }} PR #${{ github.event.pull_request.number }} (${{ github.event.pull_request.head.sha }})"
+          BOT_NAME: ${{ steps.app.outputs.app-slug }}[bot]
+          BOT_EMAIL: ${{ steps.app.outputs.app-slug }}[bot]@users.noreply.github.com
+        run: ../.emb-ci/bot/bump.sh
+
+      - name: Wait for the project CI
+        id: wait
+        if: ${{ steps.bump.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PROJECT: ${{ matrix.target.project }}
+          COMMIT: ${{ steps.bump.outputs.commit }}
+        run: echo "result=$(.emb-ci/bot/wait-ci.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          PROJECT: ${{ matrix.target.project }}
+          BRANCH: ${{ matrix.target.branch }}
+          CHANGED: ${{ steps.bump.outputs.changed }}
+          COMMIT: ${{ steps.bump.outputs.commit }}
+          RESULT: ${{ steps.wait.outputs.result }}
+        run: |
+          {
+            echo "### canary ${PROJECT}@${BRANCH}"
+            if [ "$CHANGED" != "true" ]; then
+              echo "Nothing to build: ${PROJECT} already points at this commit."
+            else
+              echo "Result: **${RESULT:-not run}**"
+              echo ""
+              echo "Project build: https://github.com/${PROJECT}/commit/${COMMIT}/checks"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete the canary branch
+        if: ${{ always() && steps.bump.outputs.changed == 'true' }}
+        working-directory: project
+        env:
+          BOT_BRANCH: ${{ steps.bump.outputs.bot_branch }}
+        run: git push --quiet origin --delete "$BOT_BRANCH" || echo "::warning::could not delete $BOT_BRANCH"
+
+      - name: Fail unless green
+        if: ${{ steps.bump.outputs.changed == 'true' && steps.wait.outputs.result != 'green' }}
+        env:
+          RESULT: ${{ steps.wait.outputs.result }}
+          PROJECT: ${{ matrix.target.project }}
+          COMMIT: ${{ steps.bump.outputs.commit }}
+        run: |
+          echo "::error::${PROJECT} CI for this PR is ${RESULT}: https://github.com/${PROJECT}/commit/${COMMIT}/checks"
+          exit 1
+
+  gate:
+    needs: [discover, build]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    name: gate
+    steps:
+      - name: All targets green (or none)
+        env:
+          DISCOVER: ${{ needs.discover.result }}
+          BUILD: ${{ needs.build.result }}
+        run: |
+          # discover is skipped for pull requests from forks (no secrets there)
+          if [ "$DISCOVER" != "success" ]; then
+            echo "::error::canary did not run (discover: $DISCOVER). Only pull requests from this repository are built."
+            exit 1
+          fi
+          case "$BUILD" in
+            success|skipped) echo "All canary targets passed (or there are none)." ;;
+            *) echo "::error::canary build result: $BUILD"; exit 1 ;;
+          esac
