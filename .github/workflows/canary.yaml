@@ -6,8 +6,8 @@ name: canary
 #
 # Per target (project branch) a canary branch bot/canary-<repo>-<sha8> is pushed
 # to the project; the project CI builds it (push trigger on bot/**) on the
-# self-hosted runner. The result is shown as check "canary / <project>@<branch>"
-# in the PR; the gate job "canary / gate" fails if any target is red. Nothing is
+# self-hosted runner. The result is shown as check "canary / ci / <repo>@<branch>"
+# in the PR; the gate job ("canary / ci / gate" in a caller with job id ci) fails if any target is red. Nothing is
 # merged into a project branch, the canary branch is deleted afterwards.
 #
 # Only for pull requests from the same repository (secrets are not available to
