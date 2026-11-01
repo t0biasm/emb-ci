@@ -114,51 +114,28 @@ jobs:
           token: ${{ steps.app.outputs.token }}
           path: project
 
-      - name: Move submodule pointers to the pushed commit
-        id: bump
+      - name: Bump, wait for the project CI and land (auto) or prepare a PR (pr)
+        id: land
         working-directory: project
         env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          MODE: ${{ matrix.target.mode }}
+          PROJECT: ${{ matrix.target.project }}
+          BRANCH: ${{ matrix.target.branch }}
           NEW_SHA: ${{ github.sha }}
           SRC_REPO: ${{ github.repository }}
           PATHS: ${{ toJSON(matrix.target.paths) }}
-          BRANCH: ${{ matrix.target.branch }}
           BOT_NAME: ${{ steps.app.outputs.app-slug }}[bot]
           BOT_EMAIL: ${{ steps.app.outputs.app-slug }}[bot]@users.noreply.github.com
-        run: ../.emb-ci/bot/bump.sh
-
-      - name: Wait for the project CI
-        id: wait
-        if: ${{ steps.bump.outputs.changed == 'true' && matrix.target.mode == 'auto' }}
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          PROJECT: ${{ matrix.target.project }}
-          COMMIT: ${{ steps.bump.outputs.commit }}
-        run: echo "result=$(.emb-ci/bot/wait-ci.sh)" >> "$GITHUB_OUTPUT"
-
-      - name: Green - fast-forward the project branch
-        if: ${{ steps.wait.outputs.result == 'green' }}
-        working-directory: project
-        env:
-          BRANCH: ${{ matrix.target.branch }}
-          BOT_BRANCH: ${{ steps.bump.outputs.bot_branch }}
-          COMMIT: ${{ steps.bump.outputs.commit }}
-        run: |
-          set -euo pipefail
-          git fetch --quiet origin "$BRANCH"
-          if ! git merge-base --is-ancestor "origin/$BRANCH" "$COMMIT"; then
-            echo "::error::$BRANCH of the project moved while the CI was running; re-run this workflow (the bump branch $BOT_BRANCH is kept)"
-            exit 1
-          fi
-          git push origin "$COMMIT:refs/heads/$BRANCH"
-          git push origin --delete "$BOT_BRANCH"
+        run: ../.emb-ci/bot/land.sh
 
       - name: Mode pr - open a pull request
-        if: ${{ steps.bump.outputs.changed == 'true' && matrix.target.mode == 'pr' }}
+        if: ${{ steps.land.outputs.changed == 'true' && steps.land.outputs.result == 'pr' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           PROJECT: ${{ matrix.target.project }}
           BRANCH: ${{ matrix.target.branch }}
-          BOT_BRANCH: ${{ steps.bump.outputs.bot_branch }}
+          BOT_BRANCH: ${{ steps.land.outputs.bot_branch }}
           SRC_REPO: ${{ github.repository }}
           NEW_SHA: ${{ github.sha }}
         run: |
@@ -166,16 +143,16 @@ jobs:
             --title "Bump ${SRC_REPO#*/} to ${NEW_SHA:0:8}" \
             --body "Automatic submodule bump (mode pr): https://github.com/${SRC_REPO}/commit/${NEW_SHA}"
 
-      - name: Not green - report
-        if: ${{ steps.bump.outputs.changed == 'true' && matrix.target.mode == 'auto' && steps.wait.outputs.result != 'green' }}
+      - name: Not landed - report
+        if: ${{ steps.land.outputs.changed == 'true' && steps.land.outputs.result != 'landed' && steps.land.outputs.result != 'pr' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           PROJECT: ${{ matrix.target.project }}
           BRANCH: ${{ matrix.target.branch }}
           SRC_REPO: ${{ github.repository }}
           NEW_SHA: ${{ github.sha }}
-          BOT_BRANCH: ${{ steps.bump.outputs.bot_branch }}
-          RESULT: ${{ steps.wait.outputs.result }}
+          BOT_BRANCH: ${{ steps.land.outputs.bot_branch }}
+          RESULT: ${{ steps.land.outputs.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail

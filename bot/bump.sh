@@ -53,7 +53,7 @@ fi
 bot_branch="bot/${kind}-${name}-${NEW_SHA:0:8}${suffix}"
 git config user.name "${BOT_NAME:-emb-bot[bot]}"
 git config user.email "${BOT_EMAIL:-emb-bot[bot]@users.noreply.github.com}"
-git checkout -q -b "$bot_branch"
+git checkout -q -B "$bot_branch"
 git commit -q -m "${TITLE:-Bump ${name} to ${NEW_SHA:0:8}}" \
   -m "$body" \
   -m "https://github.com/${SRC_REPO}/commit/${NEW_SHA}"
