@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    uses: t0biasm/emb-ci/.github/workflows/build-bazel.yaml@v1
+    uses: t0biasm/emb-ci/.github/workflows/build-bazel.yaml@v1.4.2
     with:
       project: prj-sumobot
       target: //applications/sumobot:app
