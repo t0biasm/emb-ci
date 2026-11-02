@@ -141,3 +141,65 @@ pinned=$(git --git-dir="$tmp/proj.git" ls-tree main platform/emb-platform | awk 
 [ "$pinned" = "$c2" ] || fail "red CI moved main to $pinned"
 [ -n "$(git ls-remote "$tmp/proj.git" "refs/heads/bot/bump-emb-platform-${c3:0:8}")" ] || fail "bump branch of red CI not kept"
 echo "land.sh red ok"
+
+# bump.sh PINS: two submodules pinned to different commits in one commit (canary with Depends-on)
+git init -q --bare -b main "$tmp/tc.git"
+git clone -q "$tmp/tc.git" "$tmp/tcw"
+( cd "$tmp/tcw"; git checkout -q -b main
+  echo t1 > g; git add g; git commit -q -m t1; t1=$(git rev-parse HEAD)
+  echo t2 > g; git commit -q -am t2; t2=$(git rev-parse HEAD); git push -q origin main
+  echo "$t1 $t2" > "$tmp/tc-shas" )
+read -r t1 t2 < "$tmp/tc-shas"
+git init -q --bare -b main "$tmp/proj2.git"
+git clone -q "$tmp/proj2.git" "$tmp/proj2"
+( cd "$tmp/proj2"; git checkout -q -b main
+  git submodule add -q "$tmp/gen.git" platform/emb-platform
+  git submodule add -q "$tmp/tc.git" toolchain/emb-toolchain
+  git -C platform/emb-platform checkout -q "$c1"
+  git -C toolchain/emb-toolchain checkout -q "$t1"
+  git add -A; git commit -q -m init; git push -q origin main )
+git clone -q --recurse-submodules "$tmp/proj2.git" "$tmp/work2"
+cd "$tmp/work2"
+export GITHUB_OUTPUT="$tmp/out2"; : > "$GITHUB_OUTPUT"
+PINS="[{\"path\":\"platform/emb-platform\",\"sha\":\"$c2\",\"fetch_ref\":\"refs/heads/main\"},{\"path\":\"toolchain/emb-toolchain\",\"sha\":\"$t2\",\"fetch_ref\":\"refs/heads/main\"}]" \
+  KIND=canary ALLOW_NON_FF=true TITLE="Canary: PR #7" NEW_SHA=$c2 SRC_REPO=t0biasm/emb-platform PATHS='["platform/emb-platform","toolchain/emb-toolchain"]' BRANCH=main "$here/bump.sh" >/dev/null
+grep -q 'changed=true' "$GITHUB_OUTPUT" || fail "multi-pin bump expected"
+bb2=$(sed -n 's/^bot_branch=//p' "$GITHUB_OUTPUT")
+[ "$(git --git-dir="$tmp/proj2.git" ls-tree "$bb2" platform/emb-platform | awk '{print $3}')" = "$c2" ] || fail "platform pin"
+[ "$(git --git-dir="$tmp/proj2.git" ls-tree "$bb2" toolchain/emb-toolchain | awk '{print $3}')" = "$t2" ] || fail "toolchain pin"
+echo "bump.sh pins ok"
+
+# canary-targets.sh: Depends-on pins both repositories in one target
+bt="$tmp/bt"; mkdir -p "$bt/bot" "$bt/tools"
+cp "$here/canary-targets.sh" "$bt/bot/"
+cp "$here/../tools/depends_on.py" "$bt/tools/"
+cat > "$bt/bot/discover.sh" <<'FAKE'
+#!/usr/bin/env bash
+# fake: the project branch follows the repository of SRC_NAME
+echo "[{\"project\":\"t0biasm/prj-a\",\"branch\":\"main\",\"mode\":\"auto\",\"paths\":[\"$SRC_NAME\"]}]"
+FAKE
+chmod +x "$bt/bot/discover.sh"
+mkdir -p "$tmp/shim3"
+D=dddddddddddddddddddddddddddddddddddddddd
+cat > "$tmp/shim3/gh" <<SHIM
+#!/usr/bin/env bash
+case "\$*" in
+  *"pulls/9"*) echo '{"base":"main","sha":"$D"}' ;;
+  *) echo "unexpected gh call: \$*" >&2; exit 1 ;;
+esac
+SHIM
+chmod +x "$tmp/shim3/gh"
+out=$(PATH="$tmp/shim3:$PATH" OWNER=t0biasm SRC_NAME=emb-platform SRC_REF=refs/heads/main PR_NUMBER=7 \
+  PR_HEAD_SHA=$c2 PR_BODY=$'Needs the toolchain change.\nDepends-on: https://github.com/t0biasm/emb-toolchain/pull/9' \
+  "$bt/bot/canary-targets.sh")
+[ "$(jq -c 'length' <<<"$out")" = 1 ] || fail "one target expected: $out"
+[ "$(jq -r '.[0].label' <<<"$out")" = "prj-a@main" ] || fail "label: $out"
+[ "$(jq -c '[.[0].pins[] | [.path, .sha, .fetch_ref]]' <<<"$out")" = "[[\"emb-platform\",\"$c2\",\"refs/pull/7/head\"],[\"emb-toolchain\",\"$D\",\"refs/pull/9/head\"]]" ] || fail "pins: $out"
+out=$(PATH="$tmp/shim3:$PATH" OWNER=t0biasm SRC_NAME=emb-platform SRC_REF=refs/heads/main PR_NUMBER=7 \
+  PR_HEAD_SHA=$c2 PR_BODY="no dependencies" "$bt/bot/canary-targets.sh")
+[ "$(jq -c '[.[0].pins[].path]' <<<"$out")" = '["emb-platform"]' ] || fail "no dependency: $out"
+if PATH="$tmp/shim3:$PATH" OWNER=t0biasm SRC_NAME=emb-platform SRC_REF=refs/heads/main PR_NUMBER=7 \
+    PR_HEAD_SHA=$c2 PR_BODY="Depends-on: https://github.com/evil/x/pull/1" "$bt/bot/canary-targets.sh" >/dev/null 2>&1; then
+  fail "other owner must be rejected"
+fi
+echo "canary-targets.sh ok"

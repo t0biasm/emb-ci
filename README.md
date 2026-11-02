@@ -41,3 +41,5 @@ Setup: a GitHub App (Contents rw, Pull requests rw, Issues rw, Checks r, Metadat
 
 ## canary (generic repos -> projects, on pull requests)
 `.github/workflows/canary.yaml` builds, for each pull request of a generic repository, the project branches that follow its base branch, with the submodule pointing at the PR's head commit. Each project build is a check `canary / ci / <project>@<branch>` in the PR (the target label is shown); `canary / ci / gate` is the one to make required, with the caller job id `ci`. The canary branch in the project (`bot/canary-<repo>-<sha8>`) is deleted afterwards; nothing is merged. Only pull requests from the same repository are built (no secrets for forks). Example caller: `examples/canary-caller.yaml`.
+
+**Depends-on:** a line `Depends-on: https://github.com/<owner>/<repo>/pull/<n>` in the PR description (same owner only) adds that PR's head to the pins, so the projects are built with both changes. Editing the description re-runs the canary; a new commit on the dependency does not (re-run or push to the PR).

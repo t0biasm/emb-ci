@@ -9,6 +9,7 @@ name: canary
 
 on:
   pull_request:
+    types: [ opened, synchronize, reopened, edited ]   # edited: Depends-on lines
     branches: [ main, "release/**" ]
 
 jobs:

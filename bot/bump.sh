@@ -10,40 +10,52 @@
 # because nothing is merged into the project branch.
 #
 # env: NEW_SHA SRC_REPO (owner/name) PATHS BRANCH [BOT_NAME BOT_EMAIL]
-#      [KIND=bump|canary] [FETCH_REF=NEW_SHA] [ALLOW_NON_FF=false] [TITLE]
+#      [KIND=bump|canary] [FETCH_REF=NEW_SHA] [ALLOW_NON_FF=false] [TITLE] [PINS]
 set -euo pipefail
-: "${NEW_SHA:?}" "${SRC_REPO:?}" "${PATHS:?}" "${BRANCH:?}"
+: "${NEW_SHA:?}" "${SRC_REPO:?}" "${BRANCH:?}"
+if [ -z "${PINS:-}" ]; then : "${PATHS:?}"; fi
 kind="${KIND:-bump}"
 fetch_ref="${FETCH_REF:-$NEW_SHA}"
 out="${GITHUB_OUTPUT:-/dev/null}"
 name="${SRC_REPO#*/}"
 echo "changed=false" >> "$out"
 
+# PINS: JSON [{"path","sha","fetch_ref"}], one commit per submodule (canary with
+# Depends-on). Default: every path of PATHS at NEW_SHA, fetched via FETCH_REF.
+pins="${PINS:-}"
+if [ -z "$pins" ]; then
+  pins=$(jq -c --arg sha "$NEW_SHA" --arg fetch "$fetch_ref" \
+    '[.[] | {path: ., sha: $sha, fetch_ref: $fetch}]' <<<"$PATHS")
+fi
+
 changed=""
 body=""
-for path in $(jq -r '.[]' <<<"$PATHS"); do
+while IFS= read -r pin; do
+  path=$(jq -r '.path' <<<"$pin")
+  sha=$(jq -r '.sha' <<<"$pin")
+  fref=$(jq -r '.fetch_ref' <<<"$pin")
   old=$(git rev-parse "HEAD:$path")
-  if [ "$old" = "$NEW_SHA" ]; then
-    echo "::notice::$path is already at $NEW_SHA"
+  if [ "$old" = "$sha" ]; then
+    echo "::notice::$path is already at $sha"
     continue
   fi
   git submodule update --init --no-recommend-shallow -- "$path"
-  git -C "$path" fetch --quiet origin "$fetch_ref"
-  git -C "$path" cat-file -e "$NEW_SHA^{commit}"
+  git -C "$path" fetch --quiet origin "$fref"
+  git -C "$path" cat-file -e "$sha^{commit}"
   if [ "${ALLOW_NON_FF:-false}" != "true" ] \
-      && ! git -C "$path" merge-base --is-ancestor "$old" "$NEW_SHA"; then
-    echo "::warning::$NEW_SHA is not a descendant of the pinned $old in $path, not moving (only fast-forward bumps are automatic)"
+      && ! git -C "$path" merge-base --is-ancestor "$old" "$sha"; then
+    echo "::warning::$sha is not a descendant of the pinned $old in $path, not moving (only fast-forward bumps are automatic)"
     continue
   fi
-  log=$(git -C "$path" log --oneline --max-count=20 "$old..$NEW_SHA")
-  git -C "$path" checkout --quiet "$NEW_SHA"
+  log=$(git -C "$path" log --oneline --max-count=20 "$old..$sha")
+  git -C "$path" checkout --quiet "$sha"
   git add "$path"
   changed="$changed $path"
-  body="$body$path: ${old:0:8}..${NEW_SHA:0:8}
+  body="$body$path: ${old:0:8}..${sha:0:8}
 $log
 
 "
-done
+done < <(jq -c '.[]' <<<"$pins")
 [ -n "$changed" ] || exit 0
 
 suffix=""
