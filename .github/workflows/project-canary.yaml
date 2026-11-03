@@ -1,0 +1,25 @@
+name: project-canary
+
+# Checks of this repository's pull requests: the projects are built with the PR
+# commit (see project-ci-canary.yaml). Make "projects / gate" required on main
+# once it has run successfully.
+#
+# Needs in this repository: variable EMB_BOT_APP_ID, secret EMB_BOT_PRIVATE_KEY.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  projects:
+    if: ${{ vars.EMB_BOT_APP_ID != '' && github.event.pull_request.head.repo.full_name == github.repository }}
+    uses: ./.github/workflows/project-ci-canary.yaml
+    with:
+      app-id: ${{ vars.EMB_BOT_APP_ID }}
+      sha: ${{ github.event.pull_request.head.sha }}
+      pr-number: ${{ github.event.pull_request.number }}
+    secrets:
+      app-private-key: ${{ secrets.EMB_BOT_PRIVATE_KEY }}
