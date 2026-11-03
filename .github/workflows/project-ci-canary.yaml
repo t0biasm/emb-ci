@@ -56,7 +56,8 @@ jobs:
           set -euo pipefail
           targets=$(gh api -X GET search/repositories \
             -f q="topic:emb-project user:$OWNER archived:false" \
-            --jq '[.items[] | {project: .full_name, branch: .default_branch, label: (.name + "@" + .default_branch)}]')
+            --jq '[.items[] | {project: .full_name, branch: .default_branch, label: (.name + "@" + .default_branch)}]' \
+            | jq -c .)
           echo "Targets: $targets"
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
