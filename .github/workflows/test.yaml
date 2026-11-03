@@ -14,9 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Unit tests of tools/emb_deps.py
+      - name: Unit tests of tools/ (emb_deps.py, depends_on.py)
         working-directory: tools
-        run: python3 -m unittest -v test_emb_deps
+        run: python3 -m unittest -v test_emb_deps test_depends_on
       - name: Tests of bot/*.sh (local git repos, gh shim)
         run: bot/test.sh
       - name: Workflow files parse

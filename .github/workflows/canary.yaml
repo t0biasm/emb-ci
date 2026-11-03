@@ -10,6 +10,10 @@ name: canary
 # in the PR; the gate job ("canary / ci / gate" in a caller with job id ci) fails if any target is red. Nothing is
 # merged into a project branch, the canary branch is deleted afterwards.
 #
+# "Depends-on: https://github.com/<owner>/<repo>/pull/<n>" lines in the PR
+# description add that PR's head to the pins: the project is built with both
+# (bot/canary-targets.sh). The canary re-runs when the description is edited.
+#
 # Only for pull requests from the same repository (secrets are not available to
 # forks). Call from a generic repo, pinned by tag (examples/canary-caller.yaml).
 # The GitHub App needs the same permissions as for propagate.
@@ -54,17 +58,19 @@ jobs:
           ref: ${{ inputs.ci-ref }}
           path: .emb-ci
 
-      - name: Find project branches that follow the base branch
+      - name: Find project branches that follow this PR (and its Depends-on repositories)
         id: find
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           OWNER: ${{ github.repository_owner }}
           SRC_REF: refs/heads/${{ github.event.pull_request.base.ref }}
           SRC_NAME: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
-          # label: short name for the check, e.g. prj-sumobot@main
-          targets=$(.emb-ci/bot/discover.sh | jq -c 'map(. + {label: ((.project | split("/")[1]) + "@" + .branch)})')
+          targets=$(.emb-ci/bot/canary-targets.sh)
           echo "Targets: $targets"
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
@@ -104,14 +110,13 @@ jobs:
           token: ${{ steps.app.outputs.token }}
           path: project
 
-      - name: Point submodules at the PR head and push a canary branch
+      - name: Point submodules at the PR heads and push a canary branch
         id: bump
         working-directory: project
         env:
           NEW_SHA: ${{ github.event.pull_request.head.sha }}
-          FETCH_REF: refs/pull/${{ github.event.pull_request.number }}/head
+          PINS: ${{ toJSON(matrix.target.pins) }}
           SRC_REPO: ${{ github.repository }}
-          PATHS: ${{ toJSON(matrix.target.paths) }}
           BRANCH: ${{ matrix.target.branch }}
           KIND: canary
           ALLOW_NON_FF: "true"
