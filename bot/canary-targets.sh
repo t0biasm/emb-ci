@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Targets of a canary run for a pull request of this repository: the project
 # branches that follow the PR's base branch here, or the base branch of a
-# repository named in a "Depends-on:" line of the PR description. Every target
+# repository named in a "Depends-on:" line of the PR description (the author
+# must be a collaborator). Every target
 # pins all involved submodules: this repository at the PR head, each dependency
 # at its PR head (so the project is tested with the combination).
 #
@@ -21,7 +22,14 @@ jq -n --arg repo "$SRC_NAME" --arg base "${SRC_REF#refs/heads/}" --arg sha "$PR_
 for dep in $(jq -c '.[]' <<<"$deps"); do
   repo=$(jq -r '.repo' <<<"$dep")
   number=$(jq -r '.number' <<<"$dep")
-  info=$(gh api "repos/$OWNER/$repo/pulls/$number" --jq '{base: .base.ref, sha: .head.sha}')
+  info=$(gh api "repos/$OWNER/$repo/pulls/$number" --jq '{base: .base.ref, sha: .head.sha, author: .user.login}')
+  # dependencies are built on our runner: only collaborators' pull requests count
+  author=$(jq -r '.author' <<<"$info")
+  perm=$(gh api "repos/$OWNER/$repo/collaborators/$author/permission" --jq '.permission' 2>/dev/null || echo none)
+  case "$perm" in
+    admin|maintain|write) ;;
+    *) echo "error: Depends-on $repo#$number is by $author, who is no collaborator of $OWNER (permission: $perm)" >&2; exit 1 ;;
+  esac
   jq --arg repo "$repo" --arg base "$(jq -r '.base' <<<"$info")" \
     --arg sha "$(jq -r '.sha' <<<"$info")" --arg fetch "refs/pull/$number/head" \
     '. + [{repo: $repo, base: $base, sha: $sha, fetch_ref: $fetch}]' \

@@ -1,8 +1,11 @@
 # .github/workflows/canary.yaml in a generic repository (emb-toolchain,
 # emb-platform, ...). On every pull request to main / release lines, build the
 # project branches that follow the base branch with the PR's commit (see
-# .github/workflows/canary.yaml). Make the check "canary / ci / gate" required in
-# the repository's ruleset.
+# .github/workflows/canary.yaml). Make the check "canary / ci / gate" required
+# in the repository's ruleset.
+#
+# workflow_dispatch with pr-number re-runs the canary of one PR; the canary uses
+# it to re-run the PRs that depend on a changed PR (Depends-on).
 #
 # Needs in this repository: variable EMB_BOT_APP_ID, secret EMB_BOT_PRIVATE_KEY.
 name: canary
@@ -11,13 +14,23 @@ on:
   pull_request:
     types: [ opened, synchronize, reopened, edited ]   # edited: Depends-on lines
     branches: [ main, "release/**" ]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "Pull request to canary"
+        required: true
 
 jobs:
   ci:
     if: ${{ vars.EMB_BOT_APP_ID != '' }}     # skipped until the app is configured
-    uses: t0biasm/emb-ci/.github/workflows/canary.yaml@v1.4.0
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write                         # re-run dependent pull requests
+    uses: t0biasm/emb-ci/.github/workflows/canary.yaml@v1.5.0
     with:
       app-id: ${{ vars.EMB_BOT_APP_ID }}
-      ci-ref: v1.4.0          # same tag as above
+      ci-ref: v1.5.0          # same tag as above
+      pr-number: ${{ github.event.pull_request.number || inputs.pr-number }}
     secrets:
       app-private-key: ${{ secrets.EMB_BOT_PRIVATE_KEY }}

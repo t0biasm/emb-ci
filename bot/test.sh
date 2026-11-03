@@ -184,7 +184,10 @@ D=dddddddddddddddddddddddddddddddddddddddd
 cat > "$tmp/shim3/gh" <<SHIM
 #!/usr/bin/env bash
 case "\$*" in
-  *"pulls/9"*) echo '{"base":"main","sha":"$D"}' ;;
+  *"pulls/9"*) echo '{"base":"main","sha":"$D","author":"alice"}' ;;
+  *"pulls/10"*) echo '{"base":"main","sha":"$D","author":"mallory"}' ;;
+  *"collaborators/alice/permission"*) echo write ;;
+  *"collaborators/mallory/permission"*) echo read ;;
   *) echo "unexpected gh call: \$*" >&2; exit 1 ;;
 esac
 SHIM
@@ -202,4 +205,35 @@ if PATH="$tmp/shim3:$PATH" OWNER=t0biasm SRC_NAME=emb-platform SRC_REF=refs/head
     PR_HEAD_SHA=$c2 PR_BODY="Depends-on: https://github.com/evil/x/pull/1" "$bt/bot/canary-targets.sh" >/dev/null 2>&1; then
   fail "other owner must be rejected"
 fi
+if PATH="$tmp/shim3:$PATH" OWNER=t0biasm SRC_NAME=emb-platform SRC_REF=refs/heads/main PR_NUMBER=7 \
+    PR_HEAD_SHA=$c2 PR_BODY="Depends-on: https://github.com/t0biasm/emb-toolchain/pull/10" "$bt/bot/canary-targets.sh" >/dev/null 2>&1; then
+  fail "dependency by a non-collaborator must be rejected"
+fi
 echo "canary-targets.sh ok"
+
+# dependents.sh: open same-repo PRs that depend on REPO#NUMBER
+mkdir -p "$tmp/shim4"
+cat > "$tmp/shim4/gh" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  "pr list"*) cat <<'JSON'
+[
+ {"number": 7, "headRefName": "toma/a", "isCrossRepository": false,
+  "body": "Needs it.\nDepends-on: https://github.com/t0biasm/emb-platform/pull/3"},
+ {"number": 8, "headRefName": "toma/b", "isCrossRepository": false, "body": "no deps"},
+ {"number": 9, "headRefName": "toma/c", "isCrossRepository": false,
+  "body": "Depends-on: https://github.com/t0biasm/emb-platform/pull/4"},
+ {"number": 10, "headRefName": "fork/d", "isCrossRepository": true,
+  "body": "Depends-on: https://github.com/t0biasm/emb-platform/pull/3"},
+ {"number": 11, "headRefName": "toma/e", "isCrossRepository": false,
+  "body": "Depends-on: https://github.com/evil/emb-platform/pull/3"}
+]
+JSON
+  ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+SHIM
+chmod +x "$tmp/shim4/gh"
+out=$(PATH="$tmp/shim4:$PATH" REPO=t0biasm/emb-platform NUMBER=3 "$here/dependents.sh")
+[ "$out" = "7 toma/a" ] || fail "dependents of #3: $out"
+echo "dependents.sh ok"
