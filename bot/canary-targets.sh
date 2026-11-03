@@ -48,7 +48,7 @@ for inv in $(jq -c '.[]' "$tmp/involved.json"); do
     "$tmp/found.json" >> "$tmp/pins.jsonl"
 done
 
-jq -s 'group_by([.project, .branch]) | map({
+jq -c -s 'group_by([.project, .branch]) | map({
     project: .[0].project,
     branch: .[0].branch,
     label: ((.[0].project | split("/")[1]) + "@" + .[0].branch),
