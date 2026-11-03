@@ -192,10 +192,12 @@ case "\$*" in
 esac
 SHIM
 chmod +x "$tmp/shim3/gh"
+# the output goes into $GITHUB_OUTPUT: one line only
 out=$(PATH="$tmp/shim3:$PATH" OWNER=t0biasm SRC_NAME=emb-platform SRC_REF=refs/heads/main PR_NUMBER=7 \
   PR_HEAD_SHA=$c2 PR_BODY=$'Needs the toolchain change.\nDepends-on: https://github.com/t0biasm/emb-toolchain/pull/9' \
   "$bt/bot/canary-targets.sh")
 [ "$(jq -c 'length' <<<"$out")" = 1 ] || fail "one target expected: $out"
+[ "$(wc -l <<<"$out")" -eq 1 ] || fail "targets must be one line for GITHUB_OUTPUT"
 [ "$(jq -r '.[0].label' <<<"$out")" = "prj-a@main" ] || fail "label: $out"
 [ "$(jq -c '[.[0].pins[] | [.path, .sha, .fetch_ref]]' <<<"$out")" = "[[\"emb-platform\",\"$c2\",\"refs/pull/7/head\"],[\"emb-toolchain\",\"$D\",\"refs/pull/9/head\"]]" ] || fail "pins: $out"
 out=$(PATH="$tmp/shim3:$PATH" OWNER=t0biasm SRC_NAME=emb-platform SRC_REF=refs/heads/main PR_NUMBER=7 \
