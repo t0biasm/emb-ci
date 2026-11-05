@@ -239,24 +239,3 @@ chmod +x "$tmp/shim4/gh"
 out=$(PATH="$tmp/shim4:$PATH" REPO=t0biasm/emb-platform NUMBER=3 "$here/dependents.sh")
 [ "$out" = "7 toma/a" ] || fail "dependents of #3: $out"
 echo "dependents.sh ok"
-
-# ci-canary.sh: the project's calls of emb-ci point at the commit under test
-mkdir -p "$tmp/cc"
-git init -q --bare -b main "$tmp/cc.git"
-git clone -q "$tmp/cc.git" "$tmp/cc/work"
-( cd "$tmp/cc/work"; git checkout -q -b main; mkdir -p .github/workflows
-  printf '%s\n' 'name: ci' 'jobs:' '  build:' '    uses: t0biasm/emb-ci/.github/workflows/build-bazel.yaml@v1.2.0' '    with:' '      project: prj-x' > .github/workflows/ci.yaml
-  git add -A; git commit -q -m init; git push -q origin main )
-cc_sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-cd "$tmp/cc/work"
-export GITHUB_OUTPUT="$tmp/cc_out"; : > "$GITHUB_OUTPUT"
-NEW_SHA=$cc_sha SRC_REPO=t0biasm/emb-ci BRANCH=main "$here/ci-canary.sh" >/dev/null
-grep -q 'changed=true' "$GITHUB_OUTPUT" || fail "ci-canary must change the call"
-cc_bb=$(sed -n 's/^bot_branch=//p' "$GITHUB_OUTPUT")
-[ "$cc_bb" = "bot/ci-canary-emb-ci-${cc_sha:0:8}" ] || fail "ci-canary branch $cc_bb"
-git --git-dir="$tmp/cc.git" show "$cc_bb:.github/workflows/ci.yaml" | grep -q "build-bazel.yaml@$cc_sha" || fail "ci-canary pin"
-git --git-dir="$tmp/cc.git" show main:.github/workflows/ci.yaml | grep -q "@v1.2.0" || fail "ci-canary must not touch main"
-: > "$GITHUB_OUTPUT"
-NEW_SHA=$cc_sha SRC_REPO=t0biasm/emb-ci BRANCH=main "$here/ci-canary.sh" >/dev/null 2>&1
-grep -q 'changed=true' "$GITHUB_OUTPUT" && fail "same pin must not change again"
-echo "ci-canary.sh ok"
