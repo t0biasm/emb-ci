@@ -5,9 +5,10 @@ Shared GitHub Actions workflows for all `emb-*` / `prj-*` repositories.
 ## Workflows
 | Workflow | Purpose |
 |---|---|
-| `build-bazel.yaml` | Build a Bazel target (with submodules) and upload outputs to Artifactory |
-
-Planned: `format-check`, `docs`, `canary` (build a reference project against a PR of a generic repo).
+| `.github/actions/project-build` | Composite action: build a project's Bazel target with its `[ci]` settings and upload the outputs to Artifactory (used by the project stub `examples/project-ci.yaml`) |
+| `canary.yaml` | Generic canary: build the projects that follow a PR's repository with the PR commit |
+| `propagate.yaml` | Generic propagation: move the submodule pointers of the projects after a push |
+| `canary-self.yaml`, `propagate-self.yaml` | Callers of canary and propagation for this repository |
 
 ## Usage
 Call a workflow from a project repo, **pinned by tag**; see `examples/project-ci.yaml`.
@@ -44,10 +45,7 @@ Setup: a GitHub App (Contents rw, Pull requests rw, Issues rw, Checks r, Metadat
 
 **Depends-on:** a line `Depends-on: https://github.com/<owner>/<repo>/pull/<n>` in the PR description (same owner; the dependency must be by a collaborator) adds that PR's head to the pins, so the projects are built with both changes. Editing the description re-runs the canary. After a new commit or edit of a PR, the canary of every open PR of the same repository that depends on it is re-run too (not for dependencies in other generic repositories yet).
 
-## project-canary (emb-ci pull requests -> projects)
-`.github/workflows/project-canary.yaml` (caller in this repository) builds the projects with the commit of each pull request: every repository with the topic `emb-project` gets a canary branch `bot/ci-canary-emb-ci-<sha8>` in which its calls of this repository's workflows point at the PR commit, and the project CI builds it. The checks appear in the PR as `project-canary / projects / <project>@<branch>` and the gate `projects / gate`. Reusable: `.github/workflows/project-ci-canary.yaml`; script: `bot/ci-canary.sh`.
-
-## Project setup with the submodule (stage B, in progress)
+## Project setup with the submodule
 A project takes emb-ci as the submodule `ci/emb-ci` and copies `examples/project-ci.yaml` to `.github/workflows/ci.yaml` (identical in every project). The project's own settings are the `[ci]` table of `emb-project.toml`, checked by `tools/emb_deps.py`:
 
 ```toml
@@ -64,5 +62,4 @@ upload = true                            # default true
 The build itself is the composite action `.github/actions/project-build`, which reads these settings with `emb_deps.py ci-settings`.
 
 ## Generic checks for emb-ci itself
-`canary-self.yaml` and `propagate-self.yaml` call the generic canary and propagation (`canary.yaml`, `propagate.yaml`) of this repository, like the other generic repositories. Projects that follow `ci/emb-ci` get the new commit this way. The required check of `main` is `ci / gate`, alongside the older `projects / gate` until all projects have moved.
-
+`canary-self.yaml` and `propagate-self.yaml` call the generic canary and propagation (`canary.yaml`, `propagate.yaml`) of this repository, like the other generic repositories. Projects that follow `ci/emb-ci` get the new commit this way. The required check of `main` is `ci / gate`.
