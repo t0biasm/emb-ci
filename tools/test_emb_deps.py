@@ -85,6 +85,39 @@ class EmbDepsTest(unittest.TestCase):
     def test_missing_file(self):
         self.assertTrue(emb_deps.check(tempfile.mkdtemp()))
 
+    def test_ci_defaults(self):
+        s = emb_deps.ci_settings({"project": "prj-x", "ci": {"target": "//a:b"}})
+        self.assertEqual(s["config"], "")
+        self.assertEqual(s["artifact-patterns"], "*.hex *.elf *.bin *.out")
+        self.assertEqual(s["submodules"], "recursive")
+        self.assertIs(s["upload"], True)
+        self.assertEqual(s["project"], "prj-x")
+
+    def test_ci_values_override_defaults(self):
+        s = emb_deps.ci_settings({"project": "prj-x", "ci": {
+            "target": "//applications/sumobot:app", "config": "atmega32u4",
+            "artifact-patterns": "*.hex app", "submodules": "true", "upload": False}})
+        self.assertEqual((s["config"], s["submodules"], s["upload"]), ("atmega32u4", "true", False))
+
+    def test_ci_errors(self):
+        bad = [
+            {"project": "p"},                                              # no [ci]
+            {"project": "p", "ci": {}},                                    # no target
+            {"project": "p", "ci": {"target": "app"}},                     # not a label
+            {"project": "p", "ci": {"target": "//a:b", "extra": "x"}},     # unknown key
+            {"project": "p", "ci": {"target": "//a:b", "submodules": "yes"}},
+            {"project": "p", "ci": {"target": "//a:b", "upload": "true"}},
+            {"project": "p", "ci": {"target": "//a:b", "config": 3}},
+            {"ci": {"target": "//a:b"}},                                   # no project
+        ]
+        for config in bad:
+            with self.assertRaises(emb_deps.ConfigError, msg=str(config)):
+                emb_deps.ci_settings(config)
+
+    def test_check_validates_ci_when_present(self):
+        self.assertEqual(emb_deps.check(project('project = "p"\n[ci]\ntarget = "//a:b"\nnope = 1\n')), ["[ci]: unknown keys ['nope']"])
+        self.assertEqual(emb_deps.check(project('project = "p"\n')), [])   # [ci] optional until the project migrates
+
 
 if __name__ == "__main__":
     unittest.main()

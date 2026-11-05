@@ -23,6 +23,16 @@ Commands:
     emb_deps.py check   [--root DIR] [--branch NAME]
     emb_deps.py status  [--root DIR]
     emb_deps.py match   --repo NAME --ref REF [--root DIR]   (JSON on stdout)
+    emb_deps.py ci-settings [--root DIR]                    (JSON on stdout)
+
+[ci] (read by the project-build composite action; all keys optional except target):
+
+    [ci]
+    target = "//applications/sumobot:app"
+    config = ""                                     # --config, default none
+    artifact-patterns = "*.hex *.elf *.bin *.out"   # files to upload, default shown
+    submodules = "recursive"                        # false | true | recursive
+    upload = true                                   # upload to Artifactory
 """
 
 import argparse
@@ -36,6 +46,13 @@ from pathlib import Path
 
 CONFIG_NAME = "emb-project.toml"
 MODES = ("auto", "pr", "off")
+CI_DEFAULTS = {
+    "config": "",
+    "artifact-patterns": "*.hex *.elf *.bin *.out",
+    "submodules": "recursive",
+    "upload": True,
+}
+CI_SUBMODULE_MODES = ("false", "true", "recursive")
 
 
 class ConfigError(Exception):
@@ -76,6 +93,36 @@ def follow_rules(config):
             raise ConfigError(f"follow.{path}: empty tag pattern")
         rules[path] = {"track": track, "mode": mode, "group": rule.get("group")}
     return rules
+
+
+def ci_settings(config):
+    """Validate [ci] and return the settings with defaults applied."""
+    ci = config.get("ci")
+    if not isinstance(ci, dict):
+        raise ConfigError("[ci] table is required (at least target)")
+    unknown = set(ci) - {"target"} - set(CI_DEFAULTS)
+    if unknown:
+        raise ConfigError(f"[ci]: unknown keys {sorted(unknown)}")
+    target = ci.get("target")
+    if not isinstance(target, str) or not target.startswith("//"):
+        raise ConfigError('[ci]: target must be a Bazel label such as "//applications/x:app"')
+    settings = {"target": target, **CI_DEFAULTS}
+    for key, value in ci.items():
+        if key == "target":
+            continue
+        if key == "upload":
+            if not isinstance(value, bool):
+                raise ConfigError("[ci]: upload must be true or false")
+        elif not isinstance(value, str):
+            raise ConfigError(f"[ci]: {key} must be a string")
+        settings[key] = value
+    if settings["submodules"] not in CI_SUBMODULE_MODES:
+        raise ConfigError(f"[ci]: submodules must be one of {CI_SUBMODULE_MODES}")
+    project = config.get("project")
+    if not isinstance(project, str) or not project:
+        raise ConfigError('top-level "project" is required (used for the upload path)')
+    settings["project"] = project
+    return settings
 
 
 def submodule_urls(root):
@@ -151,9 +198,11 @@ def check(root, branch=None):
     for name, settings in groups.items():
         if len(settings) > 1:
             problems.append(f"group {name!r}: members need the same mode (the tracked refs may differ per repository)")
-    ci = config.get("ci", {})
-    if not isinstance(ci, dict):
-        problems.append("[ci] must be a table")
+    if "ci" in config:
+        try:
+            ci_settings(config)
+        except ConfigError as e:
+            problems.append(str(e))
     return problems
 
 
@@ -185,7 +234,7 @@ def status(root):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("check", "status", "match"):
+    for name in ("check", "status", "match", "ci-settings"):
         p = sub.add_parser(name)
         p.add_argument("--root", default=".")
         if name == "check":
@@ -202,6 +251,9 @@ def main(argv=None):
             return 1 if problems else 0
         if args.cmd == "status":
             print(status(args.root))
+            return 0
+        if args.cmd == "ci-settings":
+            print(json.dumps(ci_settings(load_config(args.root))))
             return 0
         print(json.dumps(match(args.root, args.repo, args.ref)))
         return 0

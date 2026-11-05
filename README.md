@@ -46,3 +46,20 @@ Setup: a GitHub App (Contents rw, Pull requests rw, Issues rw, Checks r, Metadat
 
 ## project-canary (emb-ci pull requests -> projects)
 `.github/workflows/project-canary.yaml` (caller in this repository) builds the projects with the commit of each pull request: every repository with the topic `emb-project` gets a canary branch `bot/ci-canary-emb-ci-<sha8>` in which its calls of this repository's workflows point at the PR commit, and the project CI builds it. The checks appear in the PR as `project-canary / projects / <project>@<branch>` and the gate `projects / gate`. Reusable: `.github/workflows/project-ci-canary.yaml`; script: `bot/ci-canary.sh`.
+
+## Project setup with the submodule (stage B, in progress)
+A project takes emb-ci as the submodule `ci/emb-ci` and copies `examples/project-ci.yaml` to `.github/workflows/ci.yaml` (identical in every project). The project's own settings are the `[ci]` table of `emb-project.toml`, checked by `tools/emb_deps.py`:
+
+```toml
+project = "prj-sumobot"
+
+[ci]
+target = "//applications/sumobot:app"    # required
+config = "atmega32u4"                    # default: "" (no --config)
+artifact-patterns = "*.hex *.elf *.bin app"   # default: "*.hex *.elf *.bin *.out"
+submodules = "true"                      # false | true | recursive, default recursive
+upload = true                            # default true
+```
+
+The build itself is the composite action `.github/actions/project-build`, which reads these settings with `emb_deps.py ci-settings`.
+

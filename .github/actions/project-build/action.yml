@@ -1,0 +1,137 @@
+name: project-build
+description: >
+  Build a project's Bazel target with the settings of its emb-project.toml [ci]
+  table, and upload the artifacts to Artifactory. Called by the thin ci.yaml stub
+  of a project after emb-ci is checked out as a submodule at ci/emb-ci.
+  Needs the environment ARTIFACTORY_URL, ARTIFACTORY_USER, ARTIFACTORY_API_KEY
+  from the calling step (may be empty: no credentials, no upload).
+
+runs:
+  using: composite
+  steps:
+    - name: Read [ci] settings
+      id: settings
+      shell: bash
+      run: |
+        set -euo pipefail
+        json=$(python3 -I "$GITHUB_ACTION_PATH/../../../tools/emb_deps.py" ci-settings --root "$GITHUB_WORKSPACE")
+        {
+          echo "project=$(jq -r .project <<<"$json")"
+          echo "target=$(jq -r .target <<<"$json")"
+          echo "config=$(jq -r .config <<<"$json")"
+          echo "patterns=$(jq -r '."artifact-patterns"' <<<"$json")"
+          echo "submodules=$(jq -r .submodules <<<"$json")"
+          echo "upload=$(jq -r .upload <<<"$json")"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Check out submodules
+      shell: bash
+      env:
+        SUBMODULES: ${{ steps.settings.outputs.submodules }}
+      run: |
+        set -euo pipefail
+        case "$SUBMODULES" in
+          false) ;;
+          true) git submodule update --init ;;
+          recursive) git submodule update --init --recursive ;;
+        esac
+
+    - name: Set up Bazel
+      uses: bazel-contrib/setup-bazel@0.8.1
+      with:
+        bazelisk-cache: true
+
+    - name: Configure Artifactory credentials
+      shell: bash
+      run: |
+        # Bazel authenticates its downloads (compilers) with a credential helper.
+        # Write a short-lived one from the secrets; it is deleted in the last step.
+        if [ -n "$ARTIFACTORY_URL" ] && [ -n "$ARTIFACTORY_USER" ] && [ -n "$ARTIFACTORY_API_KEY" ]; then
+          host="${ARTIFACTORY_URL#*://}"
+          host="${host%%/*}"
+          basic=$(printf '%s:%s' "$ARTIFACTORY_USER" "$ARTIFACTORY_API_KEY" | base64 -w0)
+          echo "::add-mask::$ARTIFACTORY_API_KEY"
+          echo "::add-mask::$basic"
+          helper="$RUNNER_TEMP/artifactory-credential-helper"
+          umask 077
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'cat > /dev/null' \
+            "echo '{\"headers\":{\"Authorization\":[\"Basic $basic\"]}}'" > "$helper"
+          chmod 700 "$helper"
+          echo "BAZEL_CREDENTIAL_HELPER=--credential_helper=$host=$helper" >> "$GITHUB_ENV"
+        fi
+
+    - name: Build with Bazel
+      shell: bash
+      env:
+        TARGET: ${{ steps.settings.outputs.target }}
+        CONFIG: ${{ steps.settings.outputs.config }}
+      run: |
+        set -euo pipefail
+        args=()
+        if [ -n "$CONFIG" ]; then args+=("--config=$CONFIG"); fi
+        if [ -n "$ARTIFACTORY_URL" ]; then
+          args+=("--repo_env=EMB_ARTIFACTORY_URL=$ARTIFACTORY_URL")
+        fi
+        if [ -n "${BAZEL_CREDENTIAL_HELPER:-}" ]; then
+          args+=("$BAZEL_CREDENTIAL_HELPER")
+        fi
+        bazel build "${args[@]}" "$TARGET"
+
+    - name: Collect artifacts
+      shell: bash
+      env:
+        TARGET: ${{ steps.settings.outputs.target }}
+        PATTERNS: ${{ steps.settings.outputs.patterns }}
+      run: |
+        set -euo pipefail
+        # //pkg/path:name -> pkg/path
+        pkg="${TARGET#//}"
+        pkg="${pkg%%:*}"
+        mkdir -p artifacts
+        find_args=()
+        for p in $PATTERNS; do
+          if [ ${#find_args[@]} -gt 0 ]; then find_args+=(-o); fi
+          find_args+=(-name "$p")
+        done
+        find "bazel-bin/$pkg" -type f \( "${find_args[@]}" \) -exec cp {} artifacts/ \;
+        echo "Artifacts:"
+        ls -lh artifacts/
+
+    - name: Upload to Artifactory
+      if: ${{ steps.settings.outputs.upload == 'true' }}
+      shell: bash
+      env:
+        PROJECT: ${{ steps.settings.outputs.project }}
+        EVENT: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        if [ -z "$ARTIFACTORY_URL" ] || [ -z "$ARTIFACTORY_USER" ] || [ -z "$ARTIFACTORY_API_KEY" ]; then
+          echo "::notice::no Artifactory credentials, nothing uploaded"
+          exit 0
+        fi
+        timestamp=$(date +"%Y-%m-%d_%H-%M-%S")
+        if [ "$EVENT" == "pull_request" ]; then
+          upload_path="builds-local/${PROJECT}/pull/${PR_NUMBER}/${timestamp}"
+        else
+          upload_path="builds-local/${PROJECT}/main/${timestamp}"
+        fi
+        shopt -s nullglob
+        for file in artifacts/*; do
+          [ -f "$file" ] || continue
+          name=$(basename "$file")
+          echo "Uploading $name..."
+          curl --fail --silent --show-error \
+            -u "$ARTIFACTORY_USER:$ARTIFACTORY_API_KEY" \
+            -X PUT -T "$file" \
+            "$ARTIFACTORY_URL/${upload_path}/$name"
+          echo "Uploaded $name"
+        done
+        echo "All artifacts uploaded to: $ARTIFACTORY_URL/${upload_path}/"
+
+    - name: Remove Artifactory credentials
+      if: ${{ always() }}
+      shell: bash
+      run: rm -f "$RUNNER_TEMP/artifactory-credential-helper"
