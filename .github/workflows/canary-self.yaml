@@ -1,0 +1,35 @@
+name: canary-self
+
+# emb-ci is a generic repository now: its pull requests are checked by the
+# generic canary (projects that follow ci/emb-ci are built with the PR commit).
+# Required check: "ci / gate".
+#
+# Needs in this repository: variable EMB_BOT_APP_ID, secret EMB_BOT_PRIVATE_KEY.
+
+on:
+  pull_request:
+    types: [ opened, synchronize, reopened, edited ]
+    branches: [ main, "release/**" ]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "Pull request to canary"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    if: ${{ vars.EMB_BOT_APP_ID != '' }}
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    uses: ./.github/workflows/canary.yaml
+    with:
+      app-id: ${{ vars.EMB_BOT_APP_ID }}
+      ci-ref: ${{ github.sha }}
+      pr-number: ${{ github.event.pull_request.number || inputs.pr-number }}
+    secrets:
+      app-private-key: ${{ secrets.EMB_BOT_PRIVATE_KEY }}

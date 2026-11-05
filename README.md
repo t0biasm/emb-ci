@@ -63,3 +63,6 @@ upload = true                            # default true
 
 The build itself is the composite action `.github/actions/project-build`, which reads these settings with `emb_deps.py ci-settings`.
 
+## Generic checks for emb-ci itself
+`canary-self.yaml` and `propagate-self.yaml` call the generic canary and propagation (`canary.yaml`, `propagate.yaml`) of this repository, like the other generic repositories. Projects that follow `ci/emb-ci` get the new commit this way. The required check of `main` is `ci / gate`, alongside the older `projects / gate` until all projects have moved.
+
