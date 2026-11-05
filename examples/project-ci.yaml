@@ -1,17 +1,26 @@
-# Copy to <project>/.github/workflows/ci.yaml
+# .github/workflows/ci.yaml in a project. Identical in every project: the
+# project's own settings are in emb-project.toml ([ci]). Needs the submodule
+# ci/emb-ci (emb-ci at a pinned commit) and the secrets ARTIFACTORY_* (or none:
+# then the build runs without credentials and nothing is uploaded).
 name: ci
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, "release/**" ]
+  push:
+    branches: [ "bot/**" ]          # submodule bumps and canary branches
 
 jobs:
   build:
-    uses: t0biasm/emb-ci/.github/workflows/build-bazel.yaml@v1.4.2
-    with:
-      project: prj-sumobot
-      target: //applications/sumobot:app
-      config: atmega32u4
-      # extensionless "app" is the ELF produced by cc_binary_avr8
-      artifact-patterns: "*.hex *.elf *.bin app"
-    secrets: inherit
+    runs-on: [ self-hosted, linux, x64 ]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false          # done by the composite action, as [ci] says
+      - name: Check out emb-ci
+        run: git submodule update --init ci/emb-ci
+      - uses: ./ci/emb-ci/.github/actions/project-build
+        env:
+          ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
+          ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+          ARTIFACTORY_API_KEY: ${{ secrets.ARTIFACTORY_API_KEY }}
