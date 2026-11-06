@@ -1,6 +1,6 @@
 # .github/workflows/ci.yaml in a project. Identical in every project: the
 # project's own settings are in emb-project.toml ([ci]). Needs the submodule
-# ci/emb-ci (emb-ci at a pinned commit) and the secrets ARTIFACTORY_* (or none:
+# emb-ci (emb-ci at a pinned commit) and the secrets ARTIFACTORY_* (or none:
 # then the build runs without credentials and nothing is uploaded).
 name: ci
 
@@ -18,8 +18,8 @@ jobs:
         with:
           submodules: false          # done by the composite action, as [ci] says
       - name: Check out emb-ci
-        run: git submodule update --init ci/emb-ci
-      - uses: ./ci/emb-ci/.github/actions/project-build
+        run: git submodule update --init emb-ci
+      - uses: ./emb-ci/.github/actions/project-build
         env:
           ARTIFACTORY_URL: ${{ secrets.ARTIFACTORY_URL }}
           ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}

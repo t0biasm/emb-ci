@@ -1,7 +1,7 @@
 name: propagate-self
 
 # emb-ci is a generic repository now: after a push to main, projects that follow
-# ci/emb-ci get the new commit (bump, CI, fast-forward). See propagate.yaml.
+# emb-ci get the new commit (bump, CI, fast-forward). See propagate.yaml.
 #
 # Needs in this repository: variable EMB_BOT_APP_ID, secret EMB_BOT_PRIVATE_KEY.
 

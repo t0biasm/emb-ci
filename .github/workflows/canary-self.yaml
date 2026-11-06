@@ -1,7 +1,7 @@
 name: canary-self
 
 # emb-ci is a generic repository now: its pull requests are checked by the
-# generic canary (projects that follow ci/emb-ci are built with the PR commit).
+# generic canary (projects that follow emb-ci are built with the PR commit).
 # Required check: "ci / gate".
 #
 # Needs in this repository: variable EMB_BOT_APP_ID, secret EMB_BOT_PRIVATE_KEY.

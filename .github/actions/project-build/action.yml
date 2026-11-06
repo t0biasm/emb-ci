@@ -2,7 +2,7 @@ name: project-build
 description: >
   Build a project's Bazel target with the settings of its emb-project.toml [ci]
   table, and upload the artifacts to Artifactory. Called by the thin ci.yaml stub
-  of a project after emb-ci is checked out as a submodule at ci/emb-ci.
+  of a project after emb-ci is checked out as a submodule at emb-ci.
   Needs the environment ARTIFACTORY_URL, ARTIFACTORY_USER, ARTIFACTORY_API_KEY
   from the calling step (may be empty: no credentials, no upload).
 
